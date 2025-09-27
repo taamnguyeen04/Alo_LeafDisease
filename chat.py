@@ -6,7 +6,7 @@ from torchvision.models import vit_b_16, ViT_B_16_Weights
 from PIL import Image
 import numpy as np
 
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -41,13 +41,13 @@ def predict_disease(image_path):
 # ================== PHẦN 2: TẠO CHATBOT NÔNG NGHIỆP ==================
 load_dotenv()
 
-# Load tài liệu nông nghiệp (PDF sách, tài liệu)
-loader = PyPDFLoader("books/9cc1f47a-en.pdf")   # thay bằng sách thật
+# Load tài liệu nông nghiệp (text file)
+loader = TextLoader("books/huong_dan_trong_cay.txt", encoding="utf-8")   # thay bằng sách thật
 documents = loader.load()
 
 splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
 chunks = splitter.split_documents(documents)
-combined_text = "\n\n".join([chunk.page_content for chunk in chunks[:20]])  # lấy 20 chunk đầu
+combined_text = "\n\n".join([chunk.page_content for chunk in chunks])  # lấy hết nội dung
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash",
@@ -68,7 +68,7 @@ def chatbot(query, context_info=""):
 # ================== PHẦN 3: DEMO ==================
 if __name__ == "__main__":
     print("🌿 Nhập đường dẫn ảnh lá cây (hoặc gõ 'skip' để bỏ qua nhận diện).")
-    img_path = input("Ảnh lá cây: ")
+    img_path = input("Ảnh lá cây: ").strip().strip('"')
 
     disease_info = ""
     if img_path.lower() != "skip":
