@@ -1,0 +1,8 @@
+0 mango_anthracnose
+1 Clmango_bacterial_cankerass
+2 mango_cutting_weevil
+3 mango_die_back
+4 mango_gall_midge
+5 mango_healthy
+6 mango_powdery_mildew
+7 mango_sooty_mould

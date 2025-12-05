@@ -1,10 +1,7 @@
 import streamlit as st
 import os
-import torch
-import torch.nn as nn
-from torchvision import transforms
-from torchvision.models import vit_b_16, ViT_B_16_Weights
-from PIL import Image
+from keras.models import load_model as keras_load_model
+from PIL import Image, ImageOps
 import numpy as np
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -231,25 +228,49 @@ def add_custom_css():
 # ================== KHỞI TẠO MODEL VÀ CHATBOT ==================
 @st.cache_resource
 def load_model():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    """
+    Load 2-stage Keras models:
+    - Stage 1: Plant Type Classifier (from model/stage1.h5)
+    - Stage 2: Disease Classifiers (from model/*.h5 files)
+    """
+    np.set_printoptions(suppress=True)
 
     try:
-        checkpoint = torch.load("./checkpoints/best.pt", map_location=device)
-        weights = ViT_B_16_Weights.IMAGENET1K_V1
-        model = vit_b_16(weights=weights)
-        num_classes = len(os.listdir(r"C:\Users\tam\Documents\data\PlantVillage_Split\test"))
-        model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.to(device)
-        model.eval()
-
-        transform = weights.transforms()
-        class_names = os.listdir(r"C:\Users\tam\Documents\data\PlantVillage_Split\test")
-
-        return model, transform, class_names, device
+        # === STAGE 1: Load Plant Type Classifier ===
+        stage1_model = keras_load_model("model/stage1.h5", compile=False)
+        stage1_class_names = open("model/stage1.txt", "r").readlines()
+        
+        # Extract plant types from stage1 class names (remove "0 " prefix and newline)
+        plant_types = [line.strip().split(' ', 1)[1] if ' ' in line else line.strip() for line in stage1_class_names]
+        
+        # === STAGE 2: Load Disease Classifiers ===
+        stage2_models = {}
+        stage2_class_names = {}
+        
+        # Available stage 2 models from kr.py
+        available_models = ['apple', 'mango', 'tomato']
+        
+        for plant_type in available_models:
+            model_path = f"model/{plant_type}.h5"
+            txt_path = f"model/{plant_type}.txt"
+            
+            if os.path.exists(model_path) and os.path.exists(txt_path):
+                stage2_models[plant_type] = keras_load_model(model_path, compile=False)
+                stage2_class_names[plant_type] = open(txt_path, "r").readlines()
+                print(f"✅ Loaded Stage 2 model for {plant_type}")
+            else:
+                st.warning(f"⚠️ Model cho {plant_type} không tồn tại tại {model_path}")
+        
+        return {
+            'stage1_model': stage1_model,
+            'stage1_class_names': stage1_class_names,
+            'stage2_models': stage2_models,
+            'stage2_class_names': stage2_class_names,
+            'plant_types': plant_types
+        }
     except Exception as e:
         st.error(f"❌ Không thể tải model: {e}")
-        return None, None, None, None
+        return None
 
 @st.cache_resource
 def load_chatbot():
@@ -274,23 +295,61 @@ def load_chatbot():
         st.error(f"❌ Không thể tải chatbot: {e}")
         return None, None
 
-def predict_disease(image, model, transform, class_names, device):
-    if model is None:
-        return None, 0.0
+def predict_disease(image, models_dict):
+    """
+    Two-stage prediction using Keras models:
+    1. Predict plant type
+    2. Based on plant type, predict specific disease
+    """
+    if models_dict is None:
+        return None, 0.0, None, 0.0
 
     try:
+        stage1_model = models_dict['stage1_model']
+        stage1_class_names = models_dict['stage1_class_names']
+        stage2_models = models_dict['stage2_models']
+        stage2_class_names = models_dict['stage2_class_names']
+        plant_types = models_dict['plant_types']
+        
+        # Preprocess image for Keras model (224x224, normalized)
         img = image.convert("RGB")
-        img_t = transform(img).unsqueeze(0).to(device)
+        size = (224, 224)
+        img_resized = ImageOps.fit(img, size, Image.Resampling.LANCZOS)
+        
+        # Convert to numpy array and normalize
+        image_array = np.asarray(img_resized)
+        normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1
+        
+        # Create batch with shape (1, 224, 224, 3)
+        data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
+        data[0] = normalized_image_array
 
-        with torch.no_grad():
-            outputs = model(img_t)
-            probs = torch.softmax(outputs, dim=1).cpu().numpy()[0]
-            pred_idx = np.argmax(probs)
-
-        return class_names[pred_idx], probs[pred_idx]
+        # === STAGE 1: Predict Plant Type ===
+        stage1_prediction = stage1_model.predict(data)
+        plant_idx = np.argmax(stage1_prediction)
+        plant_type = plant_types[plant_idx]
+        plant_confidence = float(stage1_prediction[0][plant_idx])
+        
+        # === STAGE 2: Predict Disease ===
+        if plant_type not in stage2_models:
+            return plant_type, plant_confidence, "Model chưa được train", 0.0
+        
+        stage2_model = stage2_models[plant_type]
+        disease_class_names = stage2_class_names[plant_type]
+        
+        stage2_prediction = stage2_model.predict(data)
+        disease_idx = np.argmax(stage2_prediction)
+        
+        # Extract disease name (remove "0 " or "1 " prefix if exists)
+        disease_raw = disease_class_names[disease_idx]
+        disease = disease_raw.strip().split(' ', 1)[1] if ' ' in disease_raw else disease_raw.strip()
+        disease_confidence = float(stage2_prediction[0][disease_idx])
+        
+        return plant_type, plant_confidence, disease, disease_confidence
+        
     except Exception as e:
         st.error(f"❌ Lỗi dự đoán: {e}")
-        return None, 0.0
+        return None, 0.0, None, 0.0
 
 def chatbot_response(query, context_info, llm, combined_text):
     if llm is None:
@@ -329,17 +388,17 @@ def main():
 
         st.markdown("---")
         st.markdown("### 🌟 Thông tin")
-        st.info("🚀 Phiên bản: 2.0\n\n🎯 Tác giả: Nguyễn Quang Minh\n\n💡 Công nghệ: PyTorch + Streamlit")
+        st.info("🚀 Phiên bản: 2.0\n\n🎯 Tác giả: Nguyễn Quang Minh\n\n💡 Công nghệ: Keras + Streamlit")
 
     # Load models
-    model, transform, class_names, device = load_model()
+    models_dict = load_model()
     llm, combined_text = load_chatbot()
 
     # Main content
     if page == "🏠 Trang chủ":
         show_home_page()
     elif page == "🔬 Nhận diện bệnh":
-        show_disease_detection(model, transform, class_names, device)
+        show_disease_detection(models_dict)
     elif page == "💬 Chatbot tư vấn":
         show_chatbot(llm, combined_text)
     elif page == "📊 Thống kê":
@@ -410,8 +469,8 @@ def show_home_page():
             </div>
             """, unsafe_allow_html=True)
 
-def show_disease_detection(model, transform, class_names, device):
-    st.markdown("## 🔬 Nhận diện bệnh lá cây")
+def show_disease_detection(models_dict):
+    st.markdown("## 🔬 Nhận diện bệnh lá cây - 2 Giai đoạn")
 
     col1, col2 = st.columns([1, 1])
 
@@ -423,7 +482,7 @@ def show_disease_detection(model, transform, class_names, device):
         </div>
         """, unsafe_allow_html=True)
 
-# Image input options
+        # Image input options
         upload_option = st.radio(
             "Chọn cách tải ảnh:",
             ["📤 Tải file", "📷 Chụp ảnh"],
@@ -448,30 +507,40 @@ def show_disease_detection(model, transform, class_names, device):
             if st.button("🔍 Phân tích ngay", use_container_width=True):
                 with st.spinner("🤖 Đang phân tích..."):
                     time.sleep(1)  # Animation effect
-                    disease, confidence = predict_disease(image, model, transform, class_names, device)
+                    plant_type, plant_conf, disease, disease_conf = predict_disease(image, models_dict)
 
-                    if disease:
+                    if plant_type:
                         with col2:
+                            # Stage 1 Result
                             st.markdown(f"""
                             <div class="feature-card success-animation">
-                                <h3>🎯 Kết quả phân tích</h3>
-                                <h2 style="color: #4CAF50;">🦠 {disease}</h2>
-                                <h3>📊 Độ tin cậy: {confidence:.1%}</h3>
+                                <h3>� GIAI ĐOẠN 1: Loại cây</h3>
+                                <h2 style="color: #2196F3;">🌿 {plant_type.upper()}</h2>
+                                <h3>📊 Độ tin cậy: {plant_conf:.1%}</h3>
                             </div>
                             """, unsafe_allow_html=True)
+                            st.progress(float(plant_conf))
+                            
+                            # Stage 2 Result
+                            st.markdown(f"""
+                            <div class="feature-card success-animation">
+                                <h3>🔬 GIAI ĐOẠN 2: Bệnh cụ thể</h3>
+                                <h2 style="color: #4CAF50;">🦠 {disease}</h2>
+                                <h3>📊 Độ tin cậy: {disease_conf:.1%}</h3>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            st.progress(float(disease_conf))
 
-                            # Progress bar for confidence
-                            st.progress(float(confidence))
-
-                            if confidence > 0.8:
-                                st.success("✅ Kết quả có độ tin cậy cao!")
-                            elif confidence > 0.6:
+                            # Overall assessment
+                            if plant_conf > 0.8 and disease_conf > 0.8:
+                                st.success("✅ Cả 2 giai đoạn đều có độ tin cậy cao!")
+                            elif plant_conf > 0.6 and disease_conf > 0.6:
                                 st.warning("⚠️ Kết quả có độ tin cậy trung bình")
                             else:
-                                st.error("❌ Kết quả có độ tin cậy thấp, vui lòng thử ảnh khác")
+                                st.error("❌ Độ tin cậy thấp, vui lòng thử ảnh khác hoặc ảnh rõ hơn")
 
                             # Store result and image in session state for chatbot
-                            st.session_state.disease_info = f"Hệ thống dự đoán lá cây bị: {disease} (độ tin cậy {confidence:.2f})"
+                            st.session_state.disease_info = f"Loại cây: {plant_type} (tin cậy {plant_conf:.1%}). Bệnh: {disease} (tin cậy {disease_conf:.1%})"
                             st.session_state.analyzed_image = image
 
     with col2:
@@ -483,9 +552,17 @@ def show_disease_detection(model, transform, class_names, device):
                     <li>📷 Chụp ảnh lá cây rõ ràng</li>
                     <li>📤 Tải ảnh lên hệ thống</li>
                     <li>🔍 Nhấn nút "Phân tích ngay"</li>
-                    <li>📋 Xem kết quả và độ tin cậy</li>
+                    <li>🌱 Xem kết quả giai đoạn 1: Loại cây</li>
+                    <li>🔬 Xem kết quả giai đoạn 2: Bệnh cụ thể</li>
                     <li>💬 Tư vấn thêm qua Chatbot</li>
                 </ol>
+                <br>
+                <h3>🎯 Ưu điểm phương pháp 2 giai đoạn:</h3>
+                <ul>
+                    <li>✅ Nhận diện đúng loại cây trước</li>
+                    <li>✅ Tránh nhầm lẫn giữa các loại cây</li>
+                    <li>✅ Độ chính xác cao hơn cho bệnh cụ thể</li>
+                </ul>
             </div>
             """, unsafe_allow_html=True)
 

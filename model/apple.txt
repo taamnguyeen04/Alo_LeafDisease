@@ -1,0 +1,4 @@
+0 apple_apple_scab
+1 apple_black_rot
+2 apple_cedar_apple_rust
+3 apple_healthy
