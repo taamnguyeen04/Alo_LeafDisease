@@ -70,20 +70,10 @@ def get_augmentation_transforms():
 
 
 def augment_image(img_path, output_dir, base_name, num_augments=3):
-    """
-    Augment một ảnh và lưu các phiên bản augmented
-    
-    Args:
-        img_path: đường dẫn ảnh gốc
-        output_dir: thư mục lưu ảnh augmented
-        base_name: tên file gốc
-        num_augments: số lượng ảnh augmented cần tạo
-    """
     try:
         img = Image.open(img_path).convert('RGB')
         augment_transforms = get_augmentation_transforms()
         
-        # Random chọn các transform để apply
         selected_transforms = random.sample(augment_transforms, min(num_augments, len(augment_transforms)))
         
         augmented_paths = []

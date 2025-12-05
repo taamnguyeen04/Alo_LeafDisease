@@ -12,12 +12,6 @@ augment = A.Compose([
 ])
 
 def balance_dataset(src_root, dst_root, target_size=1000, seed=42, copy=True):
-    """
-    Tạo dataset cân bằng:
-      - Nếu class > target_size  → undersample xuống target_size
-      - Nếu class < target_size  → oversample (augmentation) lên target_size
-      - Nếu class = target_size  → giữ nguyên
-    """
     random.seed(seed)
     os.makedirs(dst_root, exist_ok=True)
 
@@ -32,7 +26,6 @@ def balance_dataset(src_root, dst_root, target_size=1000, seed=42, copy=True):
 
         n = len(files)
 
-        # -------- case 1: undersample --------
         if n > target_size:
             chosen = random.sample(files, target_size)
             for f in chosen:
@@ -44,9 +37,7 @@ def balance_dataset(src_root, dst_root, target_size=1000, seed=42, copy=True):
                     shutil.move(src, dst)
             print(f"{cls}: {target_size} ảnh (undersampled từ {n})")
 
-        # -------- case 2: oversample --------
         elif n < target_size:
-            # copy toàn bộ ảnh gốc trước
             for f in files:
                 shutil.copy(os.path.join(cls_path, f), os.path.join(dst_cls, f))
 
@@ -68,7 +59,6 @@ def balance_dataset(src_root, dst_root, target_size=1000, seed=42, copy=True):
 
             print(f"{cls}: {target_size} ảnh (oversampled từ {n})")
 
-        # -------- case 3: giữ nguyên --------
         else:
             for f in files:
                 shutil.copy(os.path.join(cls_path, f), os.path.join(dst_cls, f))
